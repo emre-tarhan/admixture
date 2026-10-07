@@ -1,0 +1,52 @@
+version: 2
+
+project_name: admixture
+
+builds:
+  - id: admix
+    main: ./cmd/admix
+    binary: admix
+    env: [CGO_ENABLED=0]
+    goos: [linux, windows, darwin]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+  - id: server
+    main: ./cmd/server
+    binary: server
+    env: [CGO_ENABLED=0]
+    goos: [linux, windows, darwin]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+# No zip/tar.gz wrappers: each binary is uploaded to the release as-is,
+# so users download exactly the one file they need.
+archives:
+  - id: admix
+    ids: [admix]
+    formats: [binary]
+    name_template: 'admix_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+  - id: server
+    ids: [server]
+    formats: [binary]
+    name_template: 'server_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: '{{ incpatch .Version }}-next'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+
+release:
+  draft: false
