@@ -54,8 +54,16 @@ Two parsing paths behind one entry point:
     the sample is homozygous-reference across their span: every wanted
     coordinate inside the span whose expected reference allele is known is
     emitted as a hom-ref genotype. No-call blocks (`./.`) are skipped.
+    A file that contains any reference block is not filled in further.
+  - A **variant-only whole-genome VCF** (at least 1,000,000 records across
+    20 autosomes; `-homref auto`, or any variant-only file with
+    `-homref on`) has no record where the sample matches the reference.
+    Model SNPs on a primary chromosome that already produced a wanted hit,
+    with a known reference allele and no record of their own, are emitted
+    as homozygous-reference. Exomes and chromosome slices are not
+    (`-homref off` disables it entirely).
   - Indels, MNPs, symbolic alleles, non-PASS records and partial no-calls
-    (`0/.`, `./.`) are skipped.
+    (`0/.`, `./.`) are skipped and are not replaced by a hom-ref guess.
 
 ### `pkg/models`
 

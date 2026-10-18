@@ -5,6 +5,33 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] — 2026-10-18
+
+### Fixed
+- **Variant-only whole-genome VCFs no longer drop homozygous-reference
+  model SNPs.** A WGS callset lists only sites that differ from the
+  reference, and treating every other model SNP as missing biased the
+  fit (common major-allele homozygotes disappear, distant components
+  inflate). In `-homref auto` (the default) a variant-only file with at
+  least 1,000,000 records across 20 autosomes is read as
+  homozygous-reference at model SNPs it does not mention, using the
+  reference allele in the coordinate index. gVCF reference blocks are
+  unchanged. Exomes, single-chromosome slices and files below that size
+  are left as "not genotyped" unless `-homref on` is set; `-homref off`
+  restores the old behavior. Filtered, indel and no-call records are
+  never replaced, and a chromosome with no wanted hit is not filled in.
+- **Coordinate index no longer points model SNPs at alt contigs.**
+  `cmd/snpindex` keeps a primary-chromosome mapping (1–22, X, Y, M) when
+  dbSNP also has an alt-contig row. 5,795 rows in `positions.tsv` that
+  had been stored on alt contigs were moved back with UCSC `hg19ToHg38`
+  from their hg19 position. The reference allele on those rows was
+  cleared, because the alt-contig base often is not the primary
+  reference; those SNPs are matched when the VCF has a record and are
+  not invented as homozygous-reference.
+
+### Added
+- CLI flag `-homref` (`auto`, `on`, `off`) and API form field `homref`.
+
 ## [0.1.0] — 2026-10-07
 
 ### Added

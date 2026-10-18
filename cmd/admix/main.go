@@ -28,6 +28,7 @@ func run(args []string) error {
 	modelsPtr := fs.String("m", "", "Admixture models, comma separated (e.g. K7b,K12b). Default: all")
 	vendorPtr := fs.String("v", "23andme", "Vendor format (23andme, ancestry, ftdna, ftdna2, wegene, myheritage, livingdna; VCF/gVCF is auto-detected)")
 	buildPtr := fs.String("b", "auto", "Reference build for VCF position matching (auto, hg19, hg38)")
+	homRefPtr := fs.String("homref", "auto", "Homozygous-reference assumption for model SNPs missing from a variant-only VCF (auto, on, off)")
 	outputPtr := fs.String("o", "", "Output file")
 	jsonPtr := fs.Bool("json", false, "Output in JSON format")
 	prettyPtr := fs.Bool("pretty", false, "Render results as bar charts in the terminal")
@@ -44,6 +45,7 @@ Usage:
 Examples:
   admix -f genome.txt -m K12b -v 23andme     23andMe raw data, Dodecad K12b
   admix -f genome.vcf.gz -m K12b,K36         VCF (auto-detected), two models
+  admix -f exome.vcf.gz -m K12b -homref off  exome VCF; do not assume hom-ref
   admix -f sample.g.vcf.gz -m K12b -pretty   gVCF, terminal bar charts
   admix -f genome.txt --json -o out.json     JSON results to a file
   admix -models                              list all available models
@@ -73,6 +75,10 @@ Flags:
 
 	if *jsonPtr && *prettyPtr {
 		return fmt.Errorf("--json and -pretty are mutually exclusive")
+	}
+	homRef, err := parser.ParseRefMode(*homRefPtr)
+	if err != nil {
+		return err
 	}
 
 	// Validate args
@@ -109,7 +115,7 @@ Flags:
 	// only matters for text files, so the resolved source is printed after)
 	wanted := models.BuildWanted(loaded)
 	fmt.Printf("Parsing raw data from %s...\n", *filePtr)
-	rawData, src, err := parser.ParseFile(*filePtr, *vendorPtr, wanted, parser.Build(*buildPtr))
+	rawData, src, err := parser.ParseFile(*filePtr, *vendorPtr, wanted, parser.Build(*buildPtr), homRef)
 	if err != nil {
 		return fmt.Errorf("parsing raw data: %w", err)
 	}
@@ -121,10 +127,16 @@ Flags:
 	}
 	fmt.Printf("Loaded %d genotypes (%s)", len(rawData), source)
 	if src.Vendor == "vcf" {
-		if src.Build != "" {
-			fmt.Printf(" — rsID + position matching")
-		} else {
+		switch {
+		case src.Build == "":
 			fmt.Printf(" — rsID matching only; pass -b hg19 or -b hg38 for position matching")
+		case src.Stats.HomRef == "assumed":
+			fmt.Printf(" — rsID + position matching; %s unobserved model SNPs called homozygous-reference", comma(src.Stats.ImputedHomRef))
+		case src.Stats.HomRef == "auto-skip":
+			fmt.Printf(" — rsID + position matching; hom-ref not assumed for this variant-only file")
+			fmt.Printf(" (smaller than a whole genome; pass -homref on to force)")
+		default:
+			fmt.Printf(" — rsID + position matching")
 		}
 	}
 	fmt.Println()

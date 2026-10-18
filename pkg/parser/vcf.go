@@ -23,12 +23,27 @@ const (
 
 // VCFStats carries diagnostics from a VCF/gVCF parse run.
 type VCFStats struct {
-	Records     int // data lines seen
-	Kept        int // records that produced at least one genotype key
-	Filtered    int // records skipped due to a failing FILTER column
-	BlockCoords int // genotype keys emitted from gVCF reference blocks
+	Records       int // data lines seen
+	Kept          int // records that produced at least one genotype key
+	Filtered      int // records skipped due to a failing FILTER column
+	BlockCoords   int // genotype keys emitted from gVCF reference blocks
+	ImputedHomRef int // model SNPs called homozygous-reference because the VCF had no record
+	// HomRef reports what happened to model SNPs the file does not list:
+	// "off", "gvcf" (reference blocks already encode hom-ref), "auto-skip"
+	// (not a whole-genome variant VCF), or "assumed".
+	HomRef      string
 	BuildSource string
 }
+
+// A variant-only whole-genome VCF lists several million sites spread across
+// the autosomes. An exome is one to two orders of magnitude smaller, and a
+// single chromosome slice does not cover 20 autosomes. Both of those must
+// keep "no record" meaning "not genotyped" — filling them as hom-ref would
+// invent calls outside the assayed regions.
+const (
+	wgsMinRecords   = 1_000_000
+	wgsMinAutosomes = 20
+)
 
 // vcfBuildSignatures maps known chromosome lengths (1-based contig
 // declarations) to reference builds. A few chromosomes per build are enough
@@ -61,9 +76,17 @@ var vcfBuildSignatures = map[int]Build{
 // still only emitted when the build is known). Indels, MNPs, symbolic
 // alleles, non-PASS records and no-calls (GT ./. ) are skipped.
 //
+// On a variant-only whole-genome VCF (ref mode "auto", or "on" for any
+// variant-only file) a model SNP on a primary chromosome that produced at
+// least one wanted hit, with no record of its own, is emitted as
+// homozygous for the index reference allele. gVCF reference blocks already
+// carry those calls, so a file that contains any block is left alone.
+// Sites that do have a record — including filtered, indel and no-call
+// records — are never replaced.
+//
 // Returns the parsed genotypes, the build used for coordinate matching
 // ("" when undetermined) and per-run statistics.
-func ParseVCF(filename string, wanted *models.Wanted, force Build) (map[string]string, Build, VCFStats, error) {
+func ParseVCF(filename string, wanted *models.Wanted, force Build, ref RefMode) (map[string]string, Build, VCFStats, error) {
 	var stats VCFStats
 
 	f, err := os.Open(filename)
@@ -119,6 +142,12 @@ headerLoop:
 
 	data := make(map[string]string, 256<<10)
 	gtIndex, lastFormat := -1, ""
+	// observed marks wanted coordinates that have a record, usable or not,
+	// so imputation cannot overwrite a filtered or non-SNP call.
+	observed := make(map[string]struct{})
+	wantedHits := make(map[string]int)
+	perChrom := make(map[string]int)
+	sawRefBlock := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -131,21 +160,38 @@ headerLoop:
 			continue
 		}
 
-		// FILTER: keep "." (unfiltered) and PASS.
-		if filt := fields[6]; filt != "." && filt != "PASS" {
-			stats.Filtered++
-			continue
-		}
-
 		pos, err := strconv.Atoi(fields[1])
 		if err != nil {
 			continue
 		}
 		chrom := normalizeChrom(fields[0])
+		if isPrimaryChrom(chrom) {
+			perChrom[chrom]++
+		}
+		if build != "" && wanted != nil {
+			key := coordKey(string(build), chrom, pos)
+			if _, ok := wanted.Lookup(key); ok {
+				observed[key] = struct{}{}
+				wantedHits[chrom]++
+			}
+		}
+
+		// FILTER: keep "." (unfiltered) and PASS. The site stays observed,
+		// so it is not later filled in as homozygous-reference.
+		if filt := fields[6]; filt != "." && filt != "PASS" {
+			stats.Filtered++
+			continue
+		}
+
 		ref := fields[3]
 		id := fields[2]
 		format := fields[8]
 		sample := fields[sampleCol]
+		// Any reference-block record marks the file as a gVCF, even when
+		// this particular block is a no-call and emits nothing.
+		if isRefBlock(fields[4], ref) {
+			sawRefBlock = true
+		}
 
 		if format != lastFormat {
 			gtIndex = -1
@@ -212,7 +258,80 @@ headerLoop:
 	if err := scanner.Err(); err != nil {
 		return nil, build, stats, err
 	}
+	stats.ImputedHomRef, stats.HomRef = imputeMissingHomRef(data, wanted, observed, wantedHits, perChrom, build, ref, sawRefBlock, stats.Records)
 	return data, build, stats, nil
+}
+
+// imputeMissingHomRef fills wanted coordinates the VCF never mentioned.
+// See ParseVCF for when that is the right reading of a variant-only file.
+func imputeMissingHomRef(data map[string]string, wanted *models.Wanted, observed map[string]struct{}, wantedHits, perChrom map[string]int, build Build, ref RefMode, sawRefBlock bool, records int) (int, string) {
+	if ref == "" {
+		ref = RefAuto
+	}
+	if ref == RefOff || wanted == nil || build == "" {
+		return 0, "off"
+	}
+	if sawRefBlock {
+		return 0, "gvcf"
+	}
+	if ref == RefAuto && !looksLikeWGS(records, perChrom) {
+		return 0, "auto-skip"
+	}
+	prefix := string(build) + ":"
+	n := 0
+	for key, refBase := range wanted.Keys {
+		if refBase == 0 || !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if _, exists := data[key]; exists {
+			continue
+		}
+		if _, seen := observed[key]; seen {
+			continue
+		}
+		chrom := chromOfKey(key)
+		// A chromosome with no wanted hit at all is either absent from the
+		// file or on the wrong reference build. Filling it would turn every
+		// model SNP into a reference homozygote.
+		if !isPrimaryChrom(chrom) || wantedHits[chrom] == 0 {
+			continue
+		}
+		data[key] = string([]byte{refBase, refBase})
+		n++
+	}
+	return n, "assumed"
+}
+
+// looksLikeWGS reports whether a variant-only VCF has the size and
+// chromosomal spread of a whole-genome callset.
+func looksLikeWGS(records int, perChrom map[string]int) bool {
+	if records < wgsMinRecords {
+		return false
+	}
+	autosomes := 0
+	for i := 1; i <= 22; i++ {
+		if perChrom[strconv.Itoa(i)] > 0 {
+			autosomes++
+		}
+	}
+	return autosomes >= wgsMinAutosomes
+}
+
+func isPrimaryChrom(chrom string) bool {
+	switch chrom {
+	case "X", "Y", "M":
+		return true
+	}
+	n, err := strconv.Atoi(chrom)
+	return err == nil && n >= 1 && n <= 22
+}
+
+func chromOfKey(key string) string {
+	parts := strings.Split(key, ":")
+	if len(parts) < 3 {
+		return ""
+	}
+	return parts[1]
 }
 
 func expandRefBlock(data map[string]string, wanted *models.Wanted, build, chrom string, start, end int) int {

@@ -33,7 +33,9 @@ Details: [docs/architecture.md](docs/architecture.md).
 - **Fast** — a full K12b fit (166,770 SNPs) takes well under a second; a
   4M-record whole-genome VCF parses in ~20 s.
 - **VCF/gVCF input** — works with or without rsID annotations, on hg19 and
-  hg38 (auto-detected), including gVCF reference blocks.
+  hg38 (auto-detected), including gVCF reference blocks. A variant-only
+  whole-genome VCF is read as homozygous-reference at model SNPs it does
+  not list.
 - **CLI and HTTP API** — use it interactively or as a local service.
 - **Multiple vendor formats** — 23andMe, AncestryDNA, FTDNA, MyHeritage,
   WeGene, LivingDNA.
@@ -58,15 +60,15 @@ Run against a raw data file:
 ```
 
 ```
-Parsing raw data from sample.vcf.gz (23andme)...
-Loaded 4013046 genotypes (VCF, hg38, rsID + position matching)
+Parsing raw data from sample.vcf.gz...
+Loaded 4177839 genotypes (VCF, hg38) — rsID + position matching; 95,282 unobserved model SNPs called homozygous-reference
 Calculating K12b...
 Model: K12b
-Caucasus: 32.10%
-Gedrosia: 15.53%
-Southwest Asian: 10.46%
+Caucasus: 43.01%
+Gedrosia: 15.65%
+Southwest Asian: 12.45%
 ...
-(85,257 of 166,770 SNPs matched)
+(164,974 of 166,770 SNPs matched)
 ```
 
 Add `-pretty` for terminal bar charts, `--json` for machine-readable
@@ -188,9 +190,10 @@ This program is GPL-3.0 like the project it derives from; see
   medical, legal or identity evidence.
 - No phasing, no strand alignment: your genotype is matched as-is against
   each model's allele definitions.
-- Variant-only VCFs (no gVCF reference blocks) cover roughly half of a
-  model's SNPs — the CLI reports the matched/total ratio so you can judge
-  result quality; see the coverage notes in
+- Exome and other partial VCFs cover only the sites they assayed. A
+  whole-genome variant VCF is filled in as homozygous-reference at the
+  model SNPs it does not list; pass `-homref off` to keep those sites
+  missing. The CLI reports the matched/total ratio either way. See
   [docs/cli.md](docs/cli.md#vcfgvcf-input).
 
 ## License

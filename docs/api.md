@@ -50,6 +50,7 @@ Request: `multipart/form-data` with:
 | `model`    | no       | `K7b`      | Model name, or comma-separated names (e.g. `K12b,K36`). |
 | `vendor`   | no       | `23andme`  | Vendor format key — same values as the CLI `-v` flag ([cli.md](cli.md#vendor-file-formats)). VCF/gVCF uploads are auto-detected regardless of this field. |
 | `build`    | no       | `auto`     | Reference build for VCF position matching (`auto`, `hg19`, `hg38`). |
+| `homref`   | no       | `auto`     | Same as the CLI `-homref` flag: `auto`, `on`, or `off`. |
 
 Example:
 

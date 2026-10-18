@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/emre-tarhan/admixture/pkg/models"
@@ -34,7 +35,7 @@ func TestParseVCFRsIDMatching(t *testing.T) {
 		"chr1\t100\trs1\tA\tG\t10\tPASS\t.\tGT\t0/1\n" +
 		"chr1\t200\trs2\tC\tA,T\t10\tPASS\t.\tGT\t1/2\n" +
 		"chr1\t300\trs3\tT\tC\t10\tPASS\t.\tGT\t1|0\n"
-	data, build, stats, err := ParseVCF(writeVCF(t, body), nil, BuildAuto)
+	data, build, stats, err := ParseVCF(writeVCF(t, body), nil, BuildAuto, RefAuto)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +55,7 @@ func TestParseVCFPositionMatching(t *testing.T) {
 	body := vcfHeader +
 		"chr1\t100\t.\tA\tG\t10\tPASS\t.\tGT:GQ\t1/1:30\n" +
 		"chr2\t5000\t.\tG\tT\t10\tPASS\t.\tGT:GQ\t0/1:30\n"
-	data, build, _, err := ParseVCF(writeVCF(t, body), wantedFor(t), BuildAuto)
+	data, build, _, err := ParseVCF(writeVCF(t, body), wantedFor(t), BuildAuto, RefAuto)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +73,7 @@ func TestParseVCFPositionMatching(t *testing.T) {
 func TestParseVCFBuildForced(t *testing.T) {
 	// Header without contigs: build unknown, forced hg19 must be used.
 	body := "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n1\t150\t.\tA\tG\t10\tPASS\t.\tGT\t0/1\n"
-	data, build, _, err := ParseVCF(writeVCF(t, body), wantedFor(t), Build19)
+	data, build, _, err := ParseVCF(writeVCF(t, body), wantedFor(t), Build19, RefAuto)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +87,7 @@ func TestParseVCFBuildForced(t *testing.T) {
 
 func TestParseVCFBuildUndetermined(t *testing.T) {
 	body := "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n1\t100\trs1\tA\tG\t10\tPASS\t.\tGT\t0/1\n"
-	data, build, _, err := ParseVCF(writeVCF(t, body), nil, BuildAuto)
+	data, build, _, err := ParseVCF(writeVCF(t, body), nil, BuildAuto, RefAuto)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +105,7 @@ func TestParseVCFGVCFCRefBlocks(t *testing.T) {
 	body := vcfHeader +
 		"chr2\t4000\t.\tG\t<*>\t0\t.\tEND=6000\tGT:GQ\t0/0:20\n" +
 		"chr2\t4100\t.\tT\t<*>\t0\t.\tEND=4200\tGT:GQ\t./.:20\n" // no-call block
-	data, _, stats, err := ParseVCF(writeVCF(t, body), wantedFor(t), BuildAuto)
+	data, _, stats, err := ParseVCF(writeVCF(t, body), wantedFor(t), BuildAuto, RefAuto)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +125,7 @@ func TestParseVCFSkips(t *testing.T) {
 		"chr1\t140\t.\tA\tG\t10\tPASS\t.\tGT\t0/.\n" + // partial no-call
 		"chr1\t150\t.\tA\tG\t10\tPASS\t.\tGL\t0.1,0.2\n" + // no GT field
 		"chr1\t160\t.\tA\tG,*\t10\tPASS\t.\tGT\t1/2\n" // spanning deletion allele
-	data, _, _, err := ParseVCF(writeVCF(t, body), nil, BuildAuto)
+	data, _, _, err := ParseVCF(writeVCF(t, body), nil, BuildAuto, RefAuto)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +137,7 @@ func TestParseVCFSkips(t *testing.T) {
 func TestParseVCFHemizygous(t *testing.T) {
 	// Haploid GT (chrX male): single allele is kept as-is.
 	body := "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\nchrX\t900\trsX\tC\tA\t10\tPASS\t.\tGT\t1\n"
-	data, _, _, err := ParseVCF(writeVCF(t, body), nil, BuildAuto)
+	data, _, _, err := ParseVCF(writeVCF(t, body), nil, BuildAuto, RefAuto)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +161,7 @@ func TestParseVCFGzipped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	data, _, _, err := ParseVCF(path, nil, BuildAuto)
+	data, _, _, err := ParseVCF(path, nil, BuildAuto, RefAuto)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,6 +202,88 @@ func TestResolveGenotype(t *testing.T) {
 		if ok != c.ok || (ok && got != c.want) {
 			t.Errorf("resolveGenotype(%q,%q,%q) = %q,%v; want %q,%v", c.gt, c.ref, c.alt, got, ok, c.want, c.ok)
 		}
+	}
+}
+
+func TestParseVCFAssumeHomRef(t *testing.T) {
+	m := &models.Model{
+		SNPs: []string{"rsCalled", "rsMissing", "rsFiltered", "rsOther"},
+		Coords: []*models.Coord{
+			{RsID: "rsCalled", Chrom: "1", Pos38: 100, Ref: 'A'},
+			{RsID: "rsMissing", Chrom: "1", Pos38: 200, Ref: 'C'},
+			{RsID: "rsFiltered", Chrom: "1", Pos38: 300, Ref: 'T'},
+			{RsID: "rsOther", Chrom: "2", Pos38: 5000, Ref: 'G'},
+		},
+	}
+	w := models.BuildWanted([]*models.Model{m})
+	body := vcfHeader +
+		"chr1\t100\t.\tA\tG\t10\tPASS\t.\tGT\t1/1\n" +
+		"chr1\t300\t.\tT\tA\t10\tLowQual\t.\tGT\t1/1\n"
+
+	data, _, stats, err := ParseVCF(writeVCF(t, body), w, BuildAuto, RefOn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data["hg38:1:100"] != "GG" {
+		t.Fatalf("called variant = %q", data["hg38:1:100"])
+	}
+	if data["hg38:1:200"] != "CC" {
+		t.Fatalf("missing site = %q, want hom-ref CC", data["hg38:1:200"])
+	}
+	if _, ok := data["hg38:1:300"]; ok {
+		t.Fatal("filtered site was called homozygous-reference")
+	}
+	if _, ok := data["hg38:2:5000"]; ok {
+		t.Fatal("chromosome with no wanted hit was filled in")
+	}
+	if stats.ImputedHomRef != 1 || stats.HomRef != "assumed" {
+		t.Fatalf("imputed=%d homref=%q", stats.ImputedHomRef, stats.HomRef)
+	}
+
+	// auto leaves a small variant-only file alone.
+	data, _, stats, err = ParseVCF(writeVCF(t, body), w, BuildAuto, RefAuto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := data["hg38:1:200"]; ok {
+		t.Fatal("auto mode imputed a file below whole-genome size")
+	}
+	if stats.HomRef != "auto-skip" {
+		t.Fatalf("homref = %q, want auto-skip", stats.HomRef)
+	}
+
+	// A gVCF block means uncovered sites stay missing, even with -homref on.
+	gvcf := vcfHeader +
+		"chr1\t100\t.\tA\tG\t10\tPASS\t.\tGT\t1/1\n" +
+		"chr1\t1000\t.\tA\t<*>\t0\t.\tEND=1000\tGT\t0/0\n"
+	data, _, stats, err = ParseVCF(writeVCF(t, gvcf), w, BuildAuto, RefOn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := data["hg38:1:200"]; ok {
+		t.Fatal("gVCF gap was called homozygous-reference")
+	}
+	if stats.HomRef != "gvcf" {
+		t.Fatalf("homref = %q, want gvcf", stats.HomRef)
+	}
+}
+
+func TestLooksLikeWGS(t *testing.T) {
+	per := map[string]int{}
+	for i := 1; i <= 22; i++ {
+		per[strconv.Itoa(i)] = 10
+	}
+	if !looksLikeWGS(wgsMinRecords, per) {
+		t.Fatal("full autosome set at the record floor should count as WGS")
+	}
+	if looksLikeWGS(wgsMinRecords-1, per) {
+		t.Fatal("record count below the floor should not count as WGS")
+	}
+	delete(per, "22")
+	delete(per, "21")
+	delete(per, "20")
+	if looksLikeWGS(wgsMinRecords, per) {
+		t.Fatal("19 autosomes should not count as WGS")
 	}
 }
 

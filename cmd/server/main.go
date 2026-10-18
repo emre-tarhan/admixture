@@ -92,6 +92,11 @@ func handleCalculate(w http.ResponseWriter, r *http.Request) {
 	if build == "" {
 		build = "auto"
 	}
+	homRef, err := parser.ParseRefMode(r.FormValue("homref"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	// Save to temp file
 	tempFile, err := os.CreateTemp("", "admix-upload-*.txt")
@@ -130,7 +135,7 @@ func handleCalculate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Server error", http.StatusInternalServerError)
 		return
 	}
-	rawData, _, err := parser.ParseFile(tempFile.Name(), vendor, models.BuildWanted(loaded), parser.Build(build))
+	rawData, _, err := parser.ParseFile(tempFile.Name(), vendor, models.BuildWanted(loaded), parser.Build(build), homRef)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error parsing data: %v", err), http.StatusBadRequest)
 		return

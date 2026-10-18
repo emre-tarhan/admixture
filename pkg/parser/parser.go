@@ -11,6 +11,33 @@ import (
 	"github.com/emre-tarhan/admixture/pkg/models"
 )
 
+// RefMode controls homozygous-reference calls for model SNPs that a
+// variant-only VCF simply does not list.
+type RefMode string
+
+const (
+	// RefAuto assumes homozygous-reference on a variant-only whole-genome
+	// VCF and leaves every other file untouched.
+	RefAuto RefMode = "auto"
+	// RefOn assumes homozygous-reference for any variant-only VCF, including
+	// exomes and single-chromosome slices.
+	RefOn RefMode = "on"
+	// RefOff never invents a genotype for a site the file does not contain.
+	RefOff RefMode = "off"
+)
+
+// ParseRefMode parses the -homref / homref values.
+func ParseRefMode(s string) (RefMode, error) {
+	switch RefMode(s) {
+	case "", RefAuto:
+		return RefAuto, nil
+	case RefOn, RefOff:
+		return RefMode(s), nil
+	default:
+		return "", fmt.Errorf("invalid hom-ref mode %q (want auto, on, or off)", s)
+	}
+}
+
 // Source describes how an input file was interpreted.
 type Source struct {
 	Vendor string // "23andme", "vcf", ...
@@ -23,9 +50,9 @@ type Source struct {
 // format. wanted is the key set to extract from VCF input (rsIDs and
 // coordinates for the selected models); build forces the reference build
 // ("auto" detects it from contig lengths).
-func ParseFile(filename, vendor string, wanted *models.Wanted, build Build) (map[string]string, Source, error) {
+func ParseFile(filename, vendor string, wanted *models.Wanted, build Build, ref RefMode) (map[string]string, Source, error) {
 	if IsVCFFile(filename) {
-		data, b, stats, err := ParseVCF(filename, wanted, build)
+		data, b, stats, err := ParseVCF(filename, wanted, build, ref)
 		src := Source{Vendor: "vcf", Build: string(b), Stats: stats}
 		return data, src, err
 	}
@@ -77,7 +104,7 @@ func parseVendorText(filename, vendor string) (map[string]string, error) {
 	case "ftdna2":
 		return parseFTDNA2(filename)
 	case "vcf", "gvcf":
-		data, _, _, err := ParseVCF(filename, nil, BuildAuto)
+		data, _, _, err := ParseVCF(filename, nil, BuildAuto, RefAuto)
 		return data, err
 	default:
 		return nil, fmt.Errorf("unsupported vendor: %s", vendor)

@@ -51,7 +51,7 @@ func BenchmarkParseVCF100k(b *testing.B) {
 	w := wantedFor(&testing.T{})
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, _, _, err := ParseVCF(path, w, BuildAuto); err != nil {
+		if _, _, _, err := ParseVCF(path, w, BuildAuto, RefAuto); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -75,7 +75,7 @@ func BenchmarkParseVCFGzip100k(b *testing.B) {
 	w := wantedFor(&testing.T{})
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, _, _, err := ParseVCF(path, w, BuildAuto); err != nil {
+		if _, _, _, err := ParseVCF(path, w, BuildAuto, RefAuto); err != nil {
 			b.Fatal(err)
 		}
 	}

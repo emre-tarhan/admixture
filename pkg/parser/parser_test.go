@@ -91,9 +91,20 @@ func TestIsVCFFile(t *testing.T) {
 	}
 }
 
+func TestParseRefMode(t *testing.T) {
+	for _, s := range []string{"", "auto", "on", "off"} {
+		if _, err := ParseRefMode(s); err != nil {
+			t.Errorf("ParseRefMode(%q): %v", s, err)
+		}
+	}
+	if _, err := ParseRefMode("yes"); err == nil {
+		t.Fatal("expected an error for yes")
+	}
+}
+
 func TestParseFileAutoDetectsVCF(t *testing.T) {
 	path := writeTemp(t, "x.vcf", "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n1\t100\trs1\tA\tG\t10\tPASS\t.\tGT\t0/1\n")
-	data, src, err := ParseFile(path, "23andme", nil, BuildAuto)
+	data, src, err := ParseFile(path, "23andme", nil, BuildAuto, RefAuto)
 	if err != nil {
 		t.Fatal(err)
 	}

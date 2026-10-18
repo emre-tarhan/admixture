@@ -6,7 +6,7 @@ one or more models.
 ## Synopsis
 
 ```
-admix -f <file> [-m <models>] [-v <vendor>] [-b <build>] [-o <file>] [--json | -pretty] [-t <tolerance>]
+admix -f <file> [-m <models>] [-v <vendor>] [-b <build>] [-homref <auto|on|off>] [-o <file>] [--json | -pretty] [-t <tolerance>]
 admix -models
 admix --help
 ```
@@ -20,6 +20,7 @@ admix --help
 | `-m`     | all       | Comma-separated model names, e.g. `K12b,K36`. Omit to run every registered model. |
 | `-v`     | `23andme` | Vendor format of the input file. One of `23andme`, `ancestry`, `ftdna`, `ftdna2`, `wegene`, `myheritage`, `livingdna`, `vcf`, `gvcf`. VCF/gVCF input is auto-detected by content, so the flag only matters for text files. |
 | `-b`     | `auto`    | Reference build for VCF position matching: `auto`, `hg19` or `hg38`. `auto` detects the build from `##contig` lengths and only matters when the file has no rsIDs. |
+| `-homref`| `auto`    | How to treat model SNPs a variant-only VCF does not list. `auto` calls them homozygous-reference on a whole-genome VCF (≥1,000,000 records on ≥20 autosomes). `on` does that for any variant-only VCF. `off` leaves them missing. gVCFs are never filled in, because their reference blocks already say where the sample is homozygous-reference. |
 | `-o`     | *(stdout)*| Write results to this file instead of stdout.                      |
 | `--json` | off       | Emit JSON (an array of result objects) instead of formatted text.  |
 | `-pretty`| off       | Render results as terminal bar charts (see below). Mutually exclusive with `--json`. |
@@ -63,11 +64,12 @@ Atlantic Med: 19.44%
 (121,334 of 166,770 SNPs matched)
 ```
 
-The matched/total ratio is the single most important quality signal: chips
-and vendor exports match ~95%+, plain WGS VCFs (variant sites only) land
-around 50%, gVCFs with reference blocks ~98%. Low ratios mean the
+The matched/total ratio is the single most important quality signal: chips,
+vendor exports, gVCFs and whole-genome variant VCFs (with the default
+`-homref auto`) match ~95%+. Exomes and other partial VCFs stay near the
+share of the model that the file actually assayed. Low ratios mean the
 optimizer is working with less information — see
-[vcf.md notes below](#vcfgvcf-input).
+[the VCF notes below](#vcfgvcf-input).
 
 ### Bar charts (`-pretty`)
 
@@ -149,35 +151,54 @@ parsed with position-aware matching:
   `-b hg38` to override (only needed for header-less files).
 - **gVCF reference blocks** — hom-ref spans (`ALT=<*>`/`<NON_REF>`,
   `END=`) resolve homozygous-reference calls for model SNPs inside the
-  span, roughly doubling matched SNPs versus a variant-only VCF. No-call
-  spans (`./.`) are skipped.
+  span. No-call spans (`./.`) are skipped. A file that contains any
+  reference block is not otherwise filled in: a gap between blocks stays
+  "not genotyped".
+- **Whole-genome variant VCFs** — a variant-only callset has no record
+  where the sample matches the reference. `-homref auto` (the default)
+  treats that as homozygous-reference when the file looks like a whole
+  genome: at least 1,000,000 data records and variants on at least 20
+  autosomes. The genotype is the reference allele from the coordinate
+  index. This applies only on primary chromosomes where at least one
+  model SNP was actually seen, so a wrong `-b` value cannot turn the
+  whole genome into reference calls. `-homref on` applies the same rule
+  to smaller files (an exome, a chromosome slice). `-homref off` keeps
+  every absent site missing.
 - Filtered records (`FILTER` other than `PASS`/`.`), indels, MNPs,
-  symbolic alleles and partial no-calls are skipped.
+  symbolic alleles and partial no-calls are skipped, and they are not
+  replaced by a homozygous-reference guess.
 - Multi-sample VCFs: the **first** sample column is used.
 
-Measured behavior (K12b, 8-core VPS):
+Measured on one DRAGEN hg38 whole-genome VCF (5.1M records, no rsIDs)
+against a 23andMe v3 file built from that same genome. K12b:
 
-| Input                                            | Matched SNPs      |
-| ------------------------------------------------ | ----------------- |
-| WGS variant VCF, hg38, no rsIDs (~4.0M records)  | 85,257 / 166,770  |
-| Same sample lifted to hg19                       | 85,256            |
-| 30× gVCF, hg38 (with reference blocks)           | 163,648 / 166,770 |
-| Same sample, hg19 variant-only export            | 85,227            |
-| 1000 Genomes chr22 slice, 2504 samples (rsIDs)   | 2,546 (chr22 only)|
+| Input                                      | Matched SNPs       |
+| ------------------------------------------ | ------------------ |
+| WGS variant VCF, `-homref auto` (default)  | 164,974 / 166,770  |
+| Same file, `-homref off`                   | 86,998 / 166,770   |
+| 23andMe v3 from the same genome            | 166,769 / 166,770  |
+| 30× gVCF, hg38 (reference blocks)          | 163,648 / 166,770  |
+| 1000 Genomes chr22 slice (rsIDs, one chrom)| 2,546 (chr22 only) |
 
-The hg38 and hg19 files of the same sample produce near-identical
-proportions (largest observed difference 0.06 percentage points), which
-confirms position matching works on both builds and that `bcftools
-liftOver` output is handled cleanly.
+On this pair the default VCF run and the 23andMe run describe the same
+person: every K12b component agrees within 0.2 percentage points, and
+every K36 component within 0.4. `-homref off` on the same VCF moves
+K12b Caucasus from 43.0% to 35.2% and invents about 10% African that
+the chip file does not have. A single-chromosome slice stays under the
+size rule, so `auto` does not fill the other chromosomes. The gVCF row
+is an earlier 30× sample whose reference blocks already supplied the
+homozygous-reference calls; that path is unchanged.
 
-**Coverage caveat.** A variant-only VCF contains no record for positions
-where the sample is homozygous-reference, so roughly half of a model's
-SNPs are missing — and the missingness is population-correlated (common
-alleles in your ancestry are the ones you're homozygous-reference for).
-Treat VCF-based results as approximations; a gVCF or a vendor raw export
-is always the better input. gVCF input is the most complete (hom-ref
-resolvable), followed by vendor text files (full chip coverage), then
-variant-only VCFs.
+**Coverage.** With `-homref auto`, a whole-genome variant VCF and a gVCF
+both resolve homozygous-reference model SNPs, so coverage lands in the
+same range as a vendor export. The assumption is only as good as the
+callset: a site filtered out, or sitting in a region the caller never
+looked at, must not be filled in. Exomes and chromosome slices therefore
+stay below the size rule and keep absent sites missing — pass `-homref on`
+only when you know the file is a complete variant list for the regions
+you care about. `-homref off` is the pre-0.1.1 behavior, and it biases
+the fit, because the dropped sites are mostly homozygous for the common
+allele.
 
 ## Exit codes
 

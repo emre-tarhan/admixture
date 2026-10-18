@@ -53,17 +53,13 @@ func main() {
 
 	// rsID -> canonical info from the UCSC tables. Only model rsIDs get a
 	// row: the UCSC tables hold ~15M entries each and materializing all of
-	// them would exhaust memory.
-	type row struct {
-		chrom        string
-		pos19, pos38 int
-		ref          byte
-	}
-	seen := make(map[string]*row, len(rsids))
-	get := func(rsid string) *row {
+	// them would exhaust memory. Each build keeps its own hit so an alt
+	// contig cannot overwrite the primary chromosome.
+	seen := make(map[string]*snpRow, len(rsids))
+	get := func(rsid string) *snpRow {
 		r, ok := seen[rsid]
 		if !ok {
-			r = &row{}
+			r = &snpRow{}
 			seen[rsid] = r
 		}
 		return r
@@ -72,11 +68,7 @@ func main() {
 	// 2. Scan the UCSC tables, keeping only model rsIDs.
 	if *hg19Path != "" {
 		n, err := scanUCSC(*hg19Path, known, func(rsid, chrom string, pos int, ref byte) {
-			r := get(rsid)
-			r.pos19, r.chrom = pos, chrom
-			if r.ref == 0 {
-				r.ref = ref
-			}
+			get(rsid).hg19.set(chrom, pos, ref)
 		})
 		if err != nil {
 			fail(err)
@@ -85,11 +77,7 @@ func main() {
 	}
 	if *hg38Path != "" {
 		n, err := scanUCSC(*hg38Path, known, func(rsid, chrom string, pos int, ref byte) {
-			r := get(rsid)
-			r.pos38, r.chrom = pos, chrom
-			if ref != 0 {
-				r.ref = ref // hg38 reference wins when both builds present
-			}
+			get(rsid).hg38.set(chrom, pos, ref)
 		})
 		if err != nil {
 			fail(err)
@@ -112,24 +100,27 @@ func main() {
 	var with19, with38, withRef, written int
 	for _, rsid := range rsids {
 		r := seen[rsid]
-		if r == nil || r.chrom == "" {
+		if r == nil {
 			continue
 		}
-		pos19, pos38 := ".", "."
-		if r.pos19 > 0 {
-			pos19 = fmt.Sprint(r.pos19)
+		chrom, pos19, pos38, ref, ok := r.fields()
+		if !ok {
+			continue
+		}
+		p19, p38, refS := ".", ".", "."
+		if pos19 > 0 {
+			p19 = fmt.Sprint(pos19)
 			with19++
 		}
-		if r.pos38 > 0 {
-			pos38 = fmt.Sprint(r.pos38)
+		if pos38 > 0 {
+			p38 = fmt.Sprint(pos38)
 			with38++
 		}
-		ref := "."
-		if r.ref != 0 {
-			ref = string(r.ref)
+		if ref != 0 {
+			refS = string(ref)
 			withRef++
 		}
-		fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\n", rsid, r.chrom, pos19, pos38, ref)
+		fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\n", rsid, chrom, p19, p38, refS)
 		written++
 	}
 
@@ -147,6 +138,79 @@ func pct(n, d int) float64 {
 		return 0
 	}
 	return 100 * float64(n) / float64(d)
+}
+
+// asmHit is one build's chosen mapping for an rsID. A primary-chromosome
+// hit (1–22, X, Y, M) is kept in preference to a later alt-contig row.
+type asmHit struct {
+	chrom   string
+	pos     int
+	ref     byte
+	primary bool
+}
+
+func (h *asmHit) set(chrom string, pos int, ref byte) {
+	prim := isPrimaryChrom(chrom)
+	if h.pos > 0 && h.primary && !prim {
+		return
+	}
+	h.chrom, h.pos, h.primary = chrom, pos, prim
+	if ref != 0 {
+		h.ref = ref
+	}
+}
+
+func isPrimaryChrom(chrom string) bool {
+	switch chrom {
+	case "X", "Y", "M":
+		return true
+	}
+	n := 0
+	for _, c := range chrom {
+		if c < '0' || c > '9' {
+			return false
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n >= 1 && n <= 22
+}
+
+type snpRow struct {
+	hg19, hg38 asmHit
+}
+
+// fields returns the index columns. Alt-contig-only hits are dropped.
+// When the two builds name different primary chromosomes, each coordinate
+// is kept only when its chromosome matches the one written (hg38 wins).
+func (r *snpRow) fields() (chrom string, pos19, pos38 int, ref byte, ok bool) {
+	c19, p19, ok19 := usable(r.hg19)
+	c38, p38, ok38 := usable(r.hg38)
+	if !ok19 && !ok38 {
+		return "", 0, 0, 0, false
+	}
+	chrom = c38
+	if chrom == "" {
+		chrom = c19
+	}
+	if ok19 && c19 == chrom {
+		pos19 = p19
+	}
+	if ok38 && c38 == chrom {
+		pos38 = p38
+	}
+	if ok38 && r.hg38.ref != 0 {
+		ref = r.hg38.ref
+	} else {
+		ref = r.hg19.ref
+	}
+	return chrom, pos19, pos38, ref, true
+}
+
+func usable(h asmHit) (string, int, bool) {
+	if h.pos > 0 && h.primary {
+		return h.chrom, h.pos, true
+	}
+	return "", 0, false
 }
 
 type modelInfo struct {
